@@ -2,11 +2,11 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"log"
 	"net"
 	"time"
 	"udp-ping/packet"
+
+	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -20,16 +20,23 @@ const (
 )
 
 func main() {
+	logrus.SetFormatter(&logrus.TextFormatter{
+		TimestampFormat: "15:04:05 02-01-2006",
+		DisableColors:   false,
+		FullTimestamp:   true,
+	})
+	logrus.SetLevel(logrus.DebugLevel)
+
 	flag.Parse()
 
 	localAddr, err := net.ResolveUDPAddr("udp", *localAddrFlag)
 	if err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 
 	udpServer, err := NewServer(localAddr)
 	if err != nil {
-		log.Fatal(err)
+		logrus.Fatal(err)
 	}
 	go udpServer.Start()
 
@@ -43,27 +50,23 @@ type Client struct {
 	Addr               net.UDPAddr
 	ConnectionTime     time.Time
 	LastRecvPacketTime time.Time
-
-	Stat ClientStat
+	Stat               ClientStat
 }
 
 type UDPServer struct {
-	conn    *net.UDPConn
-	clients map[string]Client
-
+	conn               *net.UDPConn
+	clients            map[string]Client
 	recvPacketInfoChan chan PacketInfo
 	sendPacketInfoChan chan PacketInfo
-
-	checkClientsHook chan struct{}
-
-	statisticHookChan chan struct{}
-	StatisticChan     chan Statistic
+	checkClientsHook   chan struct{}
+	statisticHookChan  chan struct{}
+	StatisticChan      chan Statistic
 }
 
 type ClientStat struct {
 	EchoRequestPacketCount int
 	EchoReplyPacketCount   int
-	AnotherPacketCount     int
+	// AnotherPacketCount     int
 }
 
 type Statistic struct {
@@ -72,11 +75,11 @@ type Statistic struct {
 }
 
 func (s Statistic) Print() {
-	fmt.Println("Statistic on", s.Time.Round(time.Second).String())
+	logrus.Println("Statistic on", s.Time.Round(time.Second).String())
 	for addr, stat := range s.Data {
-		fmt.Println("Addr:", addr, " ping:", stat.EchoRequestPacketCount, " pong:", stat.EchoReplyPacketCount)
+		logrus.Println("Addr:", addr, " ping:", stat.EchoRequestPacketCount, " pong:", stat.EchoReplyPacketCount)
 	}
-	fmt.Println("-------------------------------------------")
+	logrus.Println("-------------------------------------------")
 }
 
 type PacketInfo struct {
@@ -94,7 +97,7 @@ func NewServer(addr *net.UDPAddr) (*UDPServer, error) {
 		StatisticChan:      make(chan Statistic, 1),
 	}
 
-	log.Println("Starting listening udp on:", addr)
+	logrus.Println("Starting listening udp on:", addr)
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
@@ -179,12 +182,12 @@ func (s *UDPServer) Start() {
 
 		_, remoteAddr, err := s.conn.ReadFromUDP(buffer)
 		if err != nil {
-			log.Fatal(err)
+			logrus.Fatal(err)
 		}
 
 		incomingPacket := packet.Unmarshal(packet.ToPacketBin(buffer))
 		if incomingPacket.Type != packet.ECHO_REQUEST {
-			log.Println("not echo request")
+			logrus.Warn("not echo request")
 			continue
 		}
 		s.recvPacketInfoChan <- PacketInfo{
@@ -199,7 +202,7 @@ func (s *UDPServer) Start() {
 		}
 		_, err = s.conn.WriteToUDP(echoReplyPacket.Marshal().ToSlice(), remoteAddr)
 		if err != nil {
-			log.Fatal(err)
+			logrus.Fatal(err)
 		}
 		s.sendPacketInfoChan <- PacketInfo{
 			Packet: echoReplyPacket,

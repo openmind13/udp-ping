@@ -1,33 +1,36 @@
-package pinger
+package aim
 
 import (
-	"log"
 	"math/rand"
 	"net"
 	"time"
 	"udp-ping/packet"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Aim struct {
 	Name          string
+	Config        AimConfig
 	PingPeriod    time.Duration
 	Conn          *net.UDPConn
 	LocalAddr     net.UDPAddr
 	RemoteAddr    net.UDPAddr
-	Stat          AimStat
-	StatChan      chan AimStat
+	Stat          Stat
+	StatChan      chan Stat
 	SendPacket    chan packet.Packet
 	RecvPacket    chan packet.Packet
 	PacketIndexes map[Index]time.Time
 	StopChan      chan struct{}
 	ReconnectChan chan struct{}
+	ConfigChan    chan AimConfig
 }
 
 type Index struct {
 	int
 }
 
-type AimStat struct {
+type Stat struct {
 	Name             string
 	CreationTime     time.Time
 	LocalAddr        net.UDPAddr
@@ -38,17 +41,20 @@ type AimStat struct {
 	AverageRtt       time.Duration
 }
 
-func NewAim(aimConfig AimConfig) (*Aim, error) {
+func New(aimConfig AimConfig, pingPeriod time.Duration) (*Aim, error) {
 	aim := &Aim{
 		Name:          aimConfig.Name,
+		Config:        aimConfig,
+		PingPeriod:    pingPeriod,
 		PacketIndexes: make(map[Index]time.Time),
-		StatChan:      make(chan AimStat, 1),
+		StatChan:      make(chan Stat, 1),
 		SendPacket:    make(chan packet.Packet, 1),
 		RecvPacket:    make(chan packet.Packet, 1),
 		StopChan:      make(chan struct{}, 1),
 		ReconnectChan: make(chan struct{}, 1),
+		ConfigChan:    make(chan AimConfig, 1),
 
-		Stat: AimStat{
+		Stat: Stat{
 			Name:             aimConfig.Name,
 			CreationTime:     time.Now(),
 			SendPacketsCount: 0,
@@ -58,21 +64,7 @@ func NewAim(aimConfig AimConfig) (*Aim, error) {
 		},
 	}
 
-	if localAddr, err := net.ResolveUDPAddr("udp", aimConfig.LocalAddr); err != nil {
-		return nil, err
-	} else {
-		aim.LocalAddr = *localAddr
-		aim.Stat.LocalAddr = *localAddr
-	}
-
-	if remoteAddr, err := net.ResolveUDPAddr("udp", aimConfig.RemoteAddr); err != nil {
-		return nil, err
-	} else {
-		aim.RemoteAddr = *remoteAddr
-		aim.Stat.RemoteAddr = *remoteAddr
-	}
-
-	if err := aim.connect(); err != nil {
+	if err := aim.reconnect(); err != nil {
 		return nil, err
 	}
 
@@ -86,22 +78,40 @@ func NewAim(aimConfig AimConfig) (*Aim, error) {
 			case pack := <-aim.RecvPacket:
 				sendTime, ok := aim.PacketIndexes[Index{pack.Index}]
 				if !ok {
-					log.Println("packet index not found", pack.Index)
+					logrus.Warn("packet index not found", pack.Index)
 				} else {
 					delete(aim.PacketIndexes, Index{pack.Index})
 					aim.Stat.RecvPacketsCount++
 					packRtt := time.Since(sendTime)
 					aim.Stat.RttSum += packRtt
 					aim.Stat.AverageRtt = aim.Stat.RttSum / time.Duration(aim.Stat.RecvPacketsCount)
-					// log.Println("OK", packRtt, aim.Stats.AverageRtt)
 					select {
 					case aim.StatChan <- aim.Stat:
 					default:
 					}
 				}
 
+			case newConfig := <-aim.ConfigChan:
+				logrus.Debug("from aim new config")
+				if aim.Config == newConfig {
+					break
+				}
+				if aim.Config.LocalAddr != newConfig.LocalAddr || aim.Config.RemoteAddr != newConfig.RemoteAddr {
+					// reconnect not needed
+					aim.Conn.Close()
+					if err := aim.reconnect(); err != nil {
+						logrus.WithFields(logrus.Fields{
+							"aim_name": aim.Name,
+							"error":    err.Error(),
+						}).Error("Failed to reconnect")
+						break
+					}
+				} else {
+					logrus.Debug("Addresses doesn't changed. ", aim.Name)
+				}
+
 			case <-aim.StopChan:
-				log.Println("Stoping ping aim:", aim.RemoteAddr.String())
+				logrus.Info("Stoping ping aim:", aim.RemoteAddr.String())
 				aim.Conn.Close()
 				return
 			}
@@ -117,14 +127,14 @@ func (aim *Aim) Start() {
 			buffer := make([]byte, packet.MAX_SAFE_UDP_PAYLOAD_SIZE_BYTES)
 			n, _, err := aim.Conn.ReadFromUDP(buffer)
 			if err != nil {
-				log.Println(err)
+				logrus.Error(err)
 				return
 			}
 			incomePacket := packet.Unmarshal(packet.ToPacketBin(buffer[:n]))
 			if incomePacket.Type == packet.ECHO_REPLY {
 				aim.RecvPacket <- incomePacket
 			} else {
-				log.Println("not echo packet")
+				logrus.Warn("not echo packet")
 			}
 		}
 	}()
@@ -139,7 +149,7 @@ func (aim *Aim) Start() {
 		aim.SendPacket <- echoPacket
 		_, err := aim.Conn.WriteToUDP(echoPacket.Marshal().ToSlice(), &aim.RemoteAddr)
 		if err != nil {
-			log.Println(err)
+			logrus.Error(err)
 			return
 		}
 
@@ -147,7 +157,21 @@ func (aim *Aim) Start() {
 	}
 }
 
-func (aim *Aim) connect() error {
+func (aim *Aim) reconnect() error {
+	if localAddr, err := net.ResolveUDPAddr("udp", aim.Config.LocalAddr); err != nil {
+		return err
+	} else {
+		aim.LocalAddr = *localAddr
+		aim.Stat.LocalAddr = *localAddr
+	}
+
+	if remoteAddr, err := net.ResolveUDPAddr("udp", aim.Config.RemoteAddr); err != nil {
+		return err
+	} else {
+		aim.RemoteAddr = *remoteAddr
+		aim.Stat.RemoteAddr = *remoteAddr
+	}
+
 	conn, err := net.ListenUDP("udp", &aim.LocalAddr)
 	if err != nil {
 		return err
@@ -158,4 +182,9 @@ func (aim *Aim) connect() error {
 
 func (aim *Aim) Stop() {
 	aim.StopChan <- struct{}{}
+}
+
+func (aim *Aim) ChangeConfig() error {
+
+	return nil
 }

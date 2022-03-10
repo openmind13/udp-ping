@@ -1,71 +1,139 @@
 package pinger
 
 import (
-	"fmt"
-	"log"
 	"time"
+	"udp-ping/pinger/aim"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Statistics struct {
-	AimStats map[string]AimStat
+	AimStats map[string]aim.Stat
 }
 
 func (s Statistics) Print() {
-	fmt.Println()
+	logrus.WithFields(logrus.Fields{
+		"aims_count": len(s.AimStats),
+	}).Info("Statistics")
 	for _, stat := range s.AimStats {
-		fmt.Println(stat.Name, stat.RemoteAddr.String(), stat.AverageRtt)
+		logrus.WithFields(logrus.Fields{
+			"avg_rtt":     stat.AverageRtt,
+			"remote_addr": stat.RemoteAddr.String(),
+			"rcv_pkt_cnt": stat.RecvPacketsCount,
+		}).Info(stat.Name)
 	}
+	logrus.Info("-------------------------------------------------------------" +
+		"-----------------------------------------")
 }
 
 type Pinger struct {
-	CollectingStatsPeriod time.Duration
-	Aims                  map[string]*Aim
-	ConfigChan            chan<- Config
-	StatisticsChan        <-chan Statistics
+	Config             Config
+	Aims               map[string]*aim.Aim
+	ConfigChan         chan Config
+	StatisticsHookChan chan struct{}
+	StatisticsChan     chan Statistics
+	stopChan           chan struct{}
 }
 
 func NewPinger(config Config) (*Pinger, error) {
-	pinger := Pinger{
-		CollectingStatsPeriod: config.CollectingStatsPeriod,
-		Aims:                  map[string]*Aim{},
-		StatisticsChan:        make(chan Statistics, 1),
-		ConfigChan:            make(chan<- Config, 1),
+	p := Pinger{
+		Config:             config,
+		Aims:               map[string]*aim.Aim{},
+		ConfigChan:         make(chan Config, 1),
+		StatisticsHookChan: make(chan struct{}, 1),
+		StatisticsChan:     make(chan Statistics, 1),
+		stopChan:           make(chan struct{}, 1),
 	}
 
 	for _, aimConfig := range config.Aims {
 		if !aimConfig.IsValid() {
-			log.Println("Aim config not valid", aimConfig)
+			logrus.Error("Aim config not valid ", aimConfig)
 			continue
 		}
-		aim, err := NewAim(aimConfig)
+		aim, err := aim.New(aimConfig, p.Config.PingPeriod)
 		if err != nil {
-			log.Println("Failed create aim", err)
+			logrus.WithFields(logrus.Fields{
+				"error": err.Error(),
+			}).Error("Failed create aim")
 			continue
 		}
-		pinger.Aims[aim.RemoteAddr.String()] = aim
+		p.Aims[aim.Name] = aim
 		go aim.Start()
 	}
 
-	return &pinger, nil
+	go func() {
+		for {
+			time.Sleep(p.Config.CollectingStatsPeriod)
+			p.StatisticsHookChan <- struct{}{}
+		}
+	}()
+
+	return &p, nil
 }
 
 func (p *Pinger) Start() {
 	for {
-		time.Sleep(p.CollectingStatsPeriod)
-
-		statistics := Statistics{
-			AimStats: make(map[string]AimStat),
-		}
-
-		for _, aim := range p.Aims {
-			select {
-			case stat := <-aim.StatChan:
-				statistics.AimStats[aim.RemoteAddr.String()] = stat
-			default:
-				log.Println("Statistic for target", aim.RemoteAddr.String(), "not collected")
+		select {
+		case newConfig := <-p.ConfigChan:
+			aimInConfig := map[string]bool{}
+			for aimName := range p.Aims {
+				aimInConfig[aimName] = false
 			}
+			for _, newAimConfig := range newConfig.Aims {
+				aimInPinger, ok := p.Aims[newAimConfig.Name]
+				if !ok {
+					logrus.Debug("aim not found. create new aim ", newAimConfig.Name)
+					aim, err := aim.New(newAimConfig, p.Config.PingPeriod)
+					if err != nil {
+						logrus.WithFields(logrus.Fields{
+							"error": err.Error(),
+						}).Error("Failed create aim")
+						continue
+					}
+					p.Aims[aim.Name] = aim
+					go aim.Start()
+				} else {
+					aimInConfig[aimInPinger.Name] = true
+					logrus.Debug("Aim exists ", aimInPinger.Name)
+					aimInPinger.ConfigChan <- newAimConfig
+				}
+			}
+
+			for aimName, flag := range aimInConfig {
+				if !flag {
+					aim := p.Aims[aimName]
+					aim.Stop()
+					delete(p.Aims, aimName)
+				}
+			}
+
+		case <-p.StatisticsHookChan:
+			statistics := Statistics{AimStats: make(map[string]aim.Stat)}
+			for _, aim := range p.Aims {
+				select {
+				case stat := <-aim.StatChan:
+					statistics.AimStats[aim.RemoteAddr.String()] = stat
+				default:
+					logrus.Warn("Statistic for aim [", aim.RemoteAddr.String(), "] not collected")
+				}
+			}
+			p.StatisticsChan <- statistics
+
+		case <-p.stopChan:
+			for _, aim := range p.Aims {
+				aim.Stop()
+			}
+			// close(p.stopChan)
+			// close(p.ConfigChan)
+			// close(p.StatisticsHookChan)
+			close(p.StatisticsChan)
+			logrus.Info("Pinger has stopped")
+			return
 		}
 
-		statistics.Print()
 	}
+}
+
+func (p *Pinger) Stop() {
+	p.stopChan <- struct{}{}
 }

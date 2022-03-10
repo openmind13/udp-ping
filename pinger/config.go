@@ -1,28 +1,19 @@
 package pinger
 
-import "time"
+import (
+	"time"
+	"udp-ping/pinger/aim"
+)
 
 type Config struct {
-	CollectingStatsPeriod time.Duration
-	Aims                  []AimConfig
+	LogLevel              string          `mapstructure:"log_level"`
+	CollectingStatsPeriod time.Duration   `mapstructure:"collecting_stats_period"`
+	PingPeriod            time.Duration   `mapstructure:"ping_period"`
+	Aims                  []aim.AimConfig `mapstructure:"aim"`
 }
 
 func (c Config) IsValid() bool {
-	if c.CollectingStatsPeriod == 0 || c.Aims == nil {
-		return false
-	}
-	return true
-}
-
-type AimConfig struct {
-	Name       string
-	LocalAddr  string
-	RemoteAddr string
-	PingPeriod time.Duration
-}
-
-func (ac AimConfig) IsValid() bool {
-	if ac.Name == "" || ac.LocalAddr == "" || ac.RemoteAddr == "" || ac.PingPeriod == 0 {
+	if c.CollectingStatsPeriod == 0 || c.Aims == nil || c.PingPeriod == 0 {
 		return false
 	}
 	return true
