@@ -27,22 +27,20 @@ func (s Statistics) Print() {
 }
 
 type Pinger struct {
-	Config             Config
-	Aims               map[string]*aim.Aim
-	ConfigChan         chan Config
-	StatisticsHookChan chan struct{}
-	StatisticsChan     chan Statistics
-	stopChan           chan struct{}
+	Config         Config
+	Aims           map[string]*aim.Aim
+	ConfigChan     chan Config
+	StatisticsChan chan Statistics
+	stopChan       chan struct{}
 }
 
 func NewPinger(config Config) (*Pinger, error) {
 	p := Pinger{
-		Config:             config,
-		Aims:               map[string]*aim.Aim{},
-		ConfigChan:         make(chan Config, 1),
-		StatisticsHookChan: make(chan struct{}, 1),
-		StatisticsChan:     make(chan Statistics, 1),
-		stopChan:           make(chan struct{}, 1),
+		Config:         config,
+		Aims:           map[string]*aim.Aim{},
+		ConfigChan:     make(chan Config, 1),
+		StatisticsChan: make(chan Statistics, 1),
+		stopChan:       make(chan struct{}, 1),
 	}
 
 	for _, aimConfig := range config.Aims {
@@ -61,17 +59,12 @@ func NewPinger(config Config) (*Pinger, error) {
 		go aim.Start()
 	}
 
-	go func() {
-		for {
-			time.Sleep(p.Config.CollectingStatsPeriod)
-			p.StatisticsHookChan <- struct{}{}
-		}
-	}()
-
 	return &p, nil
 }
 
 func (p *Pinger) Start() {
+	statisticHook := time.NewTicker(p.Config.CollectingStatsPeriod)
+
 	for {
 		select {
 		case newConfig := <-p.ConfigChan:
@@ -107,7 +100,7 @@ func (p *Pinger) Start() {
 				}
 			}
 
-		case <-p.StatisticsHookChan:
+		case <-statisticHook.C:
 			statistics := Statistics{AimStats: make(map[string]aim.Stat)}
 			for _, aim := range p.Aims {
 				select {

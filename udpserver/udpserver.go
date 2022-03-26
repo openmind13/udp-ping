@@ -58,9 +58,9 @@ type UDPServer struct {
 	clients            map[string]Client
 	recvPacketInfoChan chan PacketInfo
 	sendPacketInfoChan chan PacketInfo
-	checkClientsHook   chan struct{}
-	statisticHookChan  chan struct{}
-	StatisticChan      chan Statistic
+	// checkClientsHook   chan struct{}
+	// statisticHookChan  chan struct{}
+	StatisticChan chan Statistic
 }
 
 type ClientStat struct {
@@ -92,9 +92,9 @@ func NewServer(addr *net.UDPAddr) (*UDPServer, error) {
 		clients:            make(map[string]Client),
 		recvPacketInfoChan: make(chan PacketInfo, 1),
 		sendPacketInfoChan: make(chan PacketInfo, 1),
-		checkClientsHook:   make(chan struct{}, 1),
-		statisticHookChan:  make(chan struct{}, 1),
-		StatisticChan:      make(chan Statistic, 1),
+		// checkClientsHook:   make(chan struct{}, 1),
+		// statisticHookChan: make(chan struct{}, 1),
+		StatisticChan: make(chan Statistic, 1),
 	}
 
 	logrus.Println("Starting listening udp on:", addr)
@@ -104,23 +104,27 @@ func NewServer(addr *net.UDPAddr) (*UDPServer, error) {
 	}
 	s.conn = conn
 
-	go func() {
-		for {
-			time.Sleep(STATS_PERIOD)
-			s.statisticHookChan <- struct{}{}
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		time.Sleep(STATS_PERIOD)
+	// 		s.statisticHookChan <- struct{}{}
+	// 	}
+	// }()
 
-	go func() {
-		for {
-			time.Sleep(CHECK_CLIENTS_PERIOD)
-			s.checkClientsHook <- struct{}{}
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		time.Sleep(CHECK_CLIENTS_PERIOD)
+	// 		s.checkClientsHook <- struct{}{}
+	// 	}
+	// }()
+
+	statisticHook := time.NewTicker(STATS_PERIOD)
+	checkClientHook := time.NewTicker(CHECK_CLIENTS_PERIOD)
 
 	go func() {
 		for {
 			select {
+			case <-statisticHook.C:
 			case packInfo := <-s.recvPacketInfoChan:
 				client, ok := s.clients[packInfo.Addr.String()]
 				if !ok {
@@ -147,7 +151,7 @@ func NewServer(addr *net.UDPAddr) (*UDPServer, error) {
 					client.Stat.EchoReplyPacketCount++
 					s.clients[packInfo.Addr.String()] = client
 				}
-			case <-s.statisticHookChan:
+			case <-statisticHook.C:
 				statistic := Statistic{
 					Data: make(map[string]ClientStat),
 				}
@@ -159,7 +163,7 @@ func NewServer(addr *net.UDPAddr) (*UDPServer, error) {
 				case s.StatisticChan <- statistic:
 				default: // ignore if we chan is full
 				}
-			case <-s.checkClientsHook:
+			case <-checkClientHook.C:
 				disconnectKeyCandidatesList := []string{}
 				for addrStr, client := range s.clients {
 					if time.Since(client.LastRecvPacketTime) > CLIENT_DISCONNECT_TIMEOUT {
