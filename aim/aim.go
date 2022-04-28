@@ -1,10 +1,10 @@
 package aim
 
 import (
-	"math/rand"
+	"crypto/rand"
 	"net"
 	"time"
-	"udp-ping/packet"
+	"udp-pinger/packet"
 
 	"github.com/sirupsen/logrus"
 )

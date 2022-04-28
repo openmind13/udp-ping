@@ -1,8 +1,8 @@
 package configurator
 
 import (
-	"udp-ping/logger"
-	"udp-ping/pinger"
+	"udp-pinger/logger"
+	"udp-pinger/pinger"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"

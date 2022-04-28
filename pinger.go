@@ -1,6 +1,7 @@
-package pinger
+package udppinger
 
 import (
+	"io"
 	"time"
 	"udp-ping/pinger/aim"
 
@@ -11,20 +12,20 @@ type Statistics struct {
 	AimStats map[string]aim.Stat
 }
 
-func (s Statistics) Print() {
-	logrus.WithFields(logrus.Fields{
-		"aims_count": len(s.AimStats),
-	}).Info("Statistics")
-	for _, stat := range s.AimStats {
-		logrus.WithFields(logrus.Fields{
-			"avg_rtt":     stat.AverageRtt,
-			"remote_addr": stat.RemoteAddr.String(),
-			"rcv_pkt_cnt": stat.RecvPacketsCount,
-		}).Info(stat.Name)
-	}
-	logrus.Info("-------------------------------------------------------------" +
-		"-----------------------------------------")
-}
+// func (s Statistics) Print() {
+// 	logrus.WithFields(logrus.Fields{
+// 		"aims_count": len(s.AimStats),
+// 	}).Info("Statistics")
+// 	for _, stat := range s.AimStats {
+// 		logrus.WithFields(logrus.Fields{
+// 			"avg_rtt":     stat.AverageRtt,
+// 			"remote_addr": stat.RemoteAddr.String(),
+// 			"rcv_pkt_cnt": stat.RecvPacketsCount,
+// 		}).Info(stat.Name)
+// 	}
+// 	logrus.Info("-------------------------------------------------------------" +
+// 		"-----------------------------------------")
+// }
 
 type Pinger struct {
 	Config         Config
@@ -32,15 +33,18 @@ type Pinger struct {
 	ConfigChan     chan Config
 	StatisticsChan chan Statistics
 	stopChan       chan struct{}
+
+	logger io.Writer
 }
 
-func NewPinger(config Config) (*Pinger, error) {
+func NewPinger(config Config, logger io.Writer) (*Pinger, error) {
 	p := Pinger{
 		Config:         config,
 		Aims:           map[string]*aim.Aim{},
 		ConfigChan:     make(chan Config, 1),
 		StatisticsChan: make(chan Statistics, 1),
 		stopChan:       make(chan struct{}, 1),
+		logger:         logger,
 	}
 
 	for _, aimConfig := range config.Aims {
@@ -48,7 +52,7 @@ func NewPinger(config Config) (*Pinger, error) {
 			logrus.Error("Aim config not valid ", aimConfig)
 			continue
 		}
-		aim, err := aim.New(aimConfig, p.Config.PingPeriod)
+		aim, err := aim.New(aimConfig, p.Config.PingInterval)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{
 				"error": err.Error(),
@@ -63,7 +67,7 @@ func NewPinger(config Config) (*Pinger, error) {
 }
 
 func (p *Pinger) Start() {
-	statisticHook := time.NewTicker(p.Config.CollectingStatsPeriod)
+	statisticHook := time.NewTicker(p.Config.CollectingStatsInterval)
 
 	for {
 		select {
@@ -76,7 +80,7 @@ func (p *Pinger) Start() {
 				aimInPinger, ok := p.Aims[newAimConfig.Name]
 				if !ok {
 					logrus.Debug("aim not found. create new aim ", newAimConfig.Name)
-					aim, err := aim.New(newAimConfig, p.Config.PingPeriod)
+					aim, err := aim.New(newAimConfig, p.Config.PingInterval)
 					if err != nil {
 						logrus.WithFields(logrus.Fields{
 							"error": err.Error(),

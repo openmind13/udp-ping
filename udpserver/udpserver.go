@@ -4,7 +4,7 @@ import (
 	"flag"
 	"net"
 	"time"
-	"udp-ping/packet"
+	"udp-pinger/packet"
 
 	"github.com/sirupsen/logrus"
 )
