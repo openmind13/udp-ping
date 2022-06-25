@@ -61,3 +61,9 @@ func Unmarshal(binData PacketBin) Packet {
 	}
 	return p
 }
+
+func FromBuffer(buf []byte) Packet {
+	p := Packet{}
+
+	return p
+}
